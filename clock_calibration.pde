@@ -9,6 +9,9 @@
 //          Feb 24/12 - using revised i2ckeypad library
 //          Mar 06/12 - using Keypad_I2C library
 //          Mar 8-9/12 -bar graph, clock 1/sec interrupt
+//          Mar 10/12 - ext int timer grab interval
+//          Mar 11/12 - correct grabdiff calc error, move 
+//                      most of subr to clocksubr.h, initial bar disp
 //
 // Stand-alone version to develop display formatting. Will eventually
 // use a real-time clock/calendar IC to retain values over power down.
@@ -22,109 +25,52 @@
 #include <stdint.h>
 #include <avr/interrupt.h>
 #include <avr/io.h>
-
-
 #include <Keypad_I2C.h>
 #include <Wire.h>
-
-#define ADDR1 0x21
-#define ROWS 4
-#define COLS 4
-
-char keymap1[ROWS][COLS] = {
-  {'1','2','3','+'},
-  {'4','5','6','-'},
-  {'7','8','9','*'},
-  {'c','0','.','='}
-};
-byte rowPins1[ROWS] = {0, 1, 2, 3}; //connect to the row pin bit# of the keypad
-byte colPins1[COLS] = {4, 5, 6, 7}; //connect to the column pin bit #
-
-Keypad_I2C kpd( makeKeymap(keymap1), rowPins1, colPins1, ROWS, COLS, ADDR1 );
-
-#define LCDCOLS 16
-#define LCDROWS 2
-#define LCD_ADR 0x20
-
-#define RTC_ADR 0x51      //7-bit adr - datasheet A2 write, A3 read
-#define RTC_ST_RD_ERR 1   //clock access error codes - status read
-#define RTC_TM_RD_ERR 2   // ..time read
-
-
-#include "clocksubr.h"
-
 #include <LiquidCrystal_I2C.h>
 #include <LcdBarCentreZero_I2C.h>
 
-#define MAXBARS 10        //length of display, either side
-#define POSN 3            // character position for bargraph
-#define LINE 0            // line of lcd for bargraph
-
-LiquidCrystal_I2C lcd2( LCD_ADR, LCDCOLS, LCDROWS );
-LcdBarCentreZero_I2C zcb( &lcd2 );     // create bar graph instance
-
-// bar graph variables
-int barCount = 0;         // -- value to plot for this example
+#include "clocksubr.h"
 
 // pulse per second handler variables
 byte iccnt0[ ] = { 0, 0, 0, 0 };
 byte iccnt1[ ] = { 0, 0, 0, 0 };
 byte icflag;
+byte grabflg;
 word ovflcnt = 0;
+word grabcnt = 0;
+word grabovfl;
 word *iccnt0LS;
 word *iccnt0MS;
+word iccnt;
+word ictmr, ictmrdiff;
 
-// clock variables
-const char days[ 7 ][ 4 ] = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
-const char months[ 12 ][ 4 ] = { "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                                 "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" };
-int seconds;
-int minutes;
-int hours;
-int dow;
-int dom;
-int month;
-int year;
-int century;
-char lvsignal;
 
-long msecounter;
-char datestr[32];
-
-char str[32];
-byte state[2];
-byte rawtime[16];
-
-// setting variables
-const byte setpin = 2;
-const byte alarmsetpin = 3;
-const byte alarmoutpin = 11;
-const byte ppsinpin = 8;      // pulse per second input capture input
-const byte icindpin = 13;
-byte curpos = 0;
-byte setmode;
-byte alarmsetmode;
-byte setting = false;
-byte alarmsetting = false;
-byte setkey;
-char inputstr[32];    // a few extra chars only protection of overrun
-
-byte flags;
-byte errcode;
-byte first;           // flag to control top line printing
+// clock_calibration interrupt service routines
 
 ISR( TIMER1_CAPT_vect ) {
   // read captured count
-  *iccnt0LS = ICR1;
+//  *iccnt0LS = ICR1;
+  iccnt = ICR1;
   *iccnt0MS = ovflcnt;
+//  ovflcnt = 0;
   // set flag for background
   icflag = true;
+  ictmr = TCNT1;
 } // input capture interrupt service
 
 ISR( TIMER1_OVF_vect ) {
   ovflcnt += 1;
 } // timer count overflow interrupt service
 
+void grabtimer( ) {
+  grabcnt = TCNT1;
+  grabovfl = ovflcnt;
+  grabflg = true;
+} // external interrupt to get counter contents
+
+
+// setup for interrupt service functions
 void setupInputCapt( ) {
   // get pointers to time-holding array(s)
   iccnt0LS = (word *)&iccnt0[2];
@@ -133,67 +79,17 @@ void setupInputCapt( ) {
   pinMode( ppsinpin, INPUT );
   digitalWrite( ppsinpin, HIGH );
   // set prescaler and set input capture falling edge
-  TCCR1B = 0b00000001;
+  TCCR1B = 0b00000010;    // xxxxx010 => 2 MHz clocking tmr1
   // rest of control for 'normal port' operation
   TCCR1A = 0;
   // clear all the timer1 flags
   TIFR1 = 0;
   // enable IC interrupts, OVFL ints, disable others.
   TIMSK1 = 0b00100001;
+//    TIMSK1 = 0b00100000; //no overflow ints
 } // setupInputCapt( )
 
 
-void setupBar( ) {
-  zcb.loadCG( );
-  lcd2.createChar( 1, carat1 );    //use alternate centre marker
-  lcd2.createChar( 2, carat2 );    //use alternate centre marker
-  lcd2.createChar( 3, carat3 );    //use alternate centre marker
-} // setupBar( )
-
-byte getRtcStatus( byte *st ) {
-  Wire.beginTransmission( RTC_ADR ); // start write to slave
-  Wire.send( (uint8_t) 0x00 );    // set adr pointer to status 1
-  Wire.endTransmission();
-  errcode = Wire.requestFrom( RTC_ADR, 2 ); // request control_status_1 and 2
-  if( errcode == 2 ) {
-    st[0] = Wire.receive( );
-    st[1] = Wire.receive( );
-    return 0;
-  } else {
-    return RTC_ST_RD_ERR;
-  } // if RTC responded with 2 bytes
-} // getRtcStatus
-
-byte clrRtcStatus( uint8_t fl ) {
-  state[1] = state[1] & (~fl);    // reflect new state immediately
-  Wire.beginTransmission( RTC_ADR ); // start write to slave
-  Wire.send( (uint8_t) 0x01 );    // set adr pointer to status 2
-  Wire.send( (uint8_t) state[1] );
-  Wire.endTransmission();
-  return 0;
-} // clrRtcStatus
-
-byte getRtcTime( byte *rt ) {
-  Wire.beginTransmission( RTC_ADR ); // start write to slave
-  Wire.send( (uint8_t) 0x02 );    // set adr pointer to VL_seconds
-  Wire.endTransmission();
-  errcode = Wire.requestFrom( RTC_ADR, 11 ); // request control_status_1 and 2
-  if( errcode == 11 ) {
-    for( byte ix=0; ix<11; ix++ ) {
-      *(rt+ix) = Wire.receive( );
-    } // for received bytes
-    return 0;
-  } else {
-    return RTC_TM_RD_ERR;
-  } // if RTC responded with 7 bytes
-} // getRtcTime
-
-void setRtcClkOut( byte ctrl ) {
-  Wire.beginTransmission( RTC_ADR );
-  Wire.send( (uint8_t) 0x0d );  // adr pointer to contro reg
-  Wire.send( (uint8_t) ctrl );
-  Wire.endTransmission( );
-} // setRtcClkOut
 
 void setup(){
   Wire.begin( );
@@ -249,6 +145,8 @@ void setup(){
 //  setRtcClkOut( (byte)0 );     // set clk out OFF
   msecounter = millis( );
   setupInputCapt( );
+  attachInterrupt( 0, grabtimer, RISING ); // see how ext int does
+  pinMode( extint0pin, INPUT );
   pinMode( setpin, INPUT );
   pinMode( alarmsetpin, INPUT );
   digitalWrite( setpin, HIGH );
@@ -262,8 +160,9 @@ void setup(){
 
 } // setup( )
 
+// variables for display of clock interrupt info
 byte indstate = LOW;
-word oldcnt, cntdiff;
+word oldcnt, cntdiff, oldgrab, grabdiff;
 
 void loop( ) {
   
@@ -272,22 +171,40 @@ void loop( ) {
     icflag = false;
     if( indstate == HIGH ) indstate = LOW;
     else if( indstate == LOW ) indstate = HIGH;
-    cntdiff = *iccnt0LS - oldcnt;
-    oldcnt = *iccnt0LS;
+//    cntdiff = *iccnt0LS - oldcnt;
+//    oldcnt = *iccnt0LS;
+    cntdiff = iccnt - oldcnt;
+    oldcnt = iccnt;
     Serial.print( *iccnt0MS, HEX );
-//    Serial.print( " " );
-//    Serial.print( *iccnt0LS, DEC );
+    Serial.print( " " );
+    Serial.print( iccnt, HEX );
+    ictmrdiff = ictmr - iccnt;
     Serial.print( " diff " );
-    Serial.println( cntdiff, HEX );
+    Serial.print( cntdiff, HEX );
+    Serial.print( " ictmrdiff " );
+    Serial.print( ictmrdiff, HEX );
   } // if input capt flag set
+  if( grabflg ) {
+    grabflg = false;
+    grabdiff = grabcnt - oldgrab ;
+    oldgrab = grabcnt;
+    Serial.print( " grabovfl " );
+    Serial.print( grabovfl, HEX );
+    Serial.print( " grabcnt " );
+    Serial.print( grabcnt, HEX );
+    Serial.print( " grabdiff " );
+    Serial.println( grabdiff, HEX );
+    zcb.drawBar( cntdiff-grabdiff, MAXBARS, POSN, LINE );
+    lcd2.leftToRight( ); // bar graph uses rightToLeft for neg args
+  } // if ext int timer read flag
 
   if( millis( ) >= msecounter+1000 ) {
     msecounter += 1000;
     seconds += 1;
-    zcb.drawBar( barCount, MAXBARS, POSN, LINE );
-    barCount++;
-    if( barCount > MAXBARS ) barCount = -MAXBARS;
-    lcd2.leftToRight( ); // bar graph uses rightToLeft for neg args
+//    zcb.drawBar( barCount, MAXBARS, POSN, LINE );
+//    barCount++;
+//    if( barCount > MAXBARS ) barCount = -MAXBARS;
+//    lcd2.leftToRight( ); // bar graph uses rightToLeft for neg args
     if( seconds > 59 ) {
       seconds = 0;
       minutes += 1;

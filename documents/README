@@ -1,0 +1,21 @@
+// clock_calibration
+//
+// Use the input capture mode of the ATMEGA328 counter1 to precisely 
+// compare a to-be-adjusted 1 pulse-per-second signal against a known-good
+// one pps signal (say from a gps receiver), and display the difference
+// between the two as a bar graph where each bar corresponds to 1 ppm 
+// (or better) difference between the two.
+//
+// At March 11, 2012 the development has progressed to having the basic
+// function as described working. A clock using a PCF8563 I2C rtc chip,
+// with an I2C 16X2 LCD display and various bells and whistles was 
+// developed separately, then the input-capture interrupt handlers and
+// bar graph display (also separate development) were added. The initial
+// hardware interface uses the 1 pps output from the clock chip as both
+// the reference and to-be-adjusted inputs--the falling edge triggers the
+// IC interrupt, and the rising edge triggers external interrupt 0. The
+// display shows the difference (in .5 ppm bars) between the (accurate)
+// IC input--pin 8--time interval and the external interrupt0--pin 2--
+// time interval, as well as the clock's time, date, and alarm functions.
+//
+//

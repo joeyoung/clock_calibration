@@ -1,6 +1,177 @@
 /* Revised Dec 29/11 as a subr for clock05 - G. D. Young
 
- Melody
+
+*/
+#include <Keypad_I2C.h>
+#include <Wire.h>
+
+#define ADDR1 0x21
+#define ROWS 4
+#define COLS 4
+
+char keymap1[ROWS][COLS] = {
+  {'1','2','3','+'},
+  {'4','5','6','-'},
+  {'7','8','9','*'},
+  {'c','0','.','='}
+};
+byte rowPins1[ROWS] = {0, 1, 2, 3}; //connect to the row pin bit# of the keypad
+byte colPins1[COLS] = {4, 5, 6, 7}; //connect to the column pin bit #
+
+Keypad_I2C kpd( makeKeymap(keymap1), rowPins1, colPins1, ROWS, COLS, ADDR1 );
+
+#define LCDCOLS 16
+#define LCDROWS 2
+#define LCD_ADR 0x20
+
+#define RTC_ADR 0x51      //7-bit adr - datasheet A2 write, A3 read
+#define RTC_ST_RD_ERR 1   //clock access error codes - status read
+#define RTC_TM_RD_ERR 2   // ..time read
+
+
+
+
+#include <LiquidCrystal_I2C.h>
+#include <LcdBarCentreZero_I2C.h>
+
+#define MAXBARS 10        //length of display, either side
+#define POSN 3            // character position for bargraph
+#define LINE 0            // line of lcd for bargraph
+
+LiquidCrystal_I2C lcd2( LCD_ADR, LCDCOLS, LCDROWS );
+LcdBarCentreZero_I2C zcb( &lcd2 );     // create bar graph instance
+
+// bar graph variables
+int barCount = 0;         // -- value to plot for this example
+
+// clock variables
+const char days[ 7 ][ 4 ] = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
+const char months[ 12 ][ 4 ] = { "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                                 "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" };
+int seconds;
+int minutes;
+int hours;
+int dow;
+int dom;
+int month;
+int year;
+int century;
+char lvsignal;
+
+long msecounter;
+char datestr[32];
+
+char str[32];
+byte state[2];
+byte rawtime[16];
+
+// setting variables
+// const byte setpin = 2;
+const byte extint0pin = 2;   //use ext int on pin 2
+const byte setpin = 4;
+const byte alarmsetpin = 3;
+const byte alarmoutpin = 11;
+const byte ppsinpin = 8;      // pulse per second input capture input
+const byte icindpin = 13;
+byte curpos = 0;
+byte setmode;
+byte alarmsetmode;
+byte setting = false;
+byte alarmsetting = false;
+byte setkey;
+char inputstr[32];    // a few extra chars only protection of overrun
+
+byte flags;
+byte errcode;
+byte first;           // flag to control top line printing
+
+
+// for bargraph display
+byte carat1[8] = {
+  B00000,
+  B00000,
+  B01010,
+  B00100,      // centre marker, alternate style
+  B00000,
+  B00100,
+  B00100,
+  B00100
+};
+byte carat2[8] = {
+  B00000,
+  B00000,
+  B01010,
+  B00100,      // centre marker plus right 1 bar
+  B00001,
+  B00101,
+  B00101,
+  B00101
+};
+byte carat3[8] = {
+  B00000,
+  B00000,
+  B01010,
+  B00100,      // centre marker plus left 1 bar
+  B10000,
+  B10100,
+  B10100,
+  B10100
+};
+
+void setupBar( ) {
+  zcb.loadCG( );
+  lcd2.createChar( 1, carat1 );    //use alternate centre marker
+  lcd2.createChar( 2, carat2 );    //use alternate centre marker
+  lcd2.createChar( 3, carat3 );    //use alternate centre marker
+} // setupBar( )
+
+byte getRtcStatus( byte *st ) {
+  Wire.beginTransmission( RTC_ADR ); // start write to slave
+  Wire.send( (uint8_t) 0x00 );    // set adr pointer to status 1
+  Wire.endTransmission();
+  errcode = Wire.requestFrom( RTC_ADR, 2 ); // request control_status_1 and 2
+  if( errcode == 2 ) {
+    st[0] = Wire.receive( );
+    st[1] = Wire.receive( );
+    return 0;
+  } else {
+    return RTC_ST_RD_ERR;
+  } // if RTC responded with 2 bytes
+} // getRtcStatus
+
+byte clrRtcStatus( uint8_t fl ) {
+  state[1] = state[1] & (~fl);    // reflect new state immediately
+  Wire.beginTransmission( RTC_ADR ); // start write to slave
+  Wire.send( (uint8_t) 0x01 );    // set adr pointer to status 2
+  Wire.send( (uint8_t) state[1] );
+  Wire.endTransmission();
+  return 0;
+} // clrRtcStatus
+
+byte getRtcTime( byte *rt ) {
+  Wire.beginTransmission( RTC_ADR ); // start write to slave
+  Wire.send( (uint8_t) 0x02 );    // set adr pointer to VL_seconds
+  Wire.endTransmission();
+  errcode = Wire.requestFrom( RTC_ADR, 11 ); // request control_status_1 and 2
+  if( errcode == 11 ) {
+    for( byte ix=0; ix<11; ix++ ) {
+      *(rt+ix) = Wire.receive( );
+    } // for received bytes
+    return 0;
+  } else {
+    return RTC_TM_RD_ERR;
+  } // if RTC responded with 7 bytes
+} // getRtcTime
+
+void setRtcClkOut( byte ctrl ) {
+  Wire.beginTransmission( RTC_ADR );
+  Wire.send( (uint8_t) 0x0d );  // adr pointer to contro reg
+  Wire.send( (uint8_t) ctrl );
+  Wire.endTransmission( );
+} // setRtcClkOut
+
+
+/* Melody
  
  Plays a melody 
  
@@ -97,37 +268,5 @@ void playtune( uint8_t tunenr ) {
 void kbdBeep( int note, int durn ) {
   tone( TONEPIN, EXTMULT*note, durn );
 } // kbdBeep
-
-// for bargraph display
-byte carat1[8] = {
-  B00000,
-  B00000,
-  B01010,
-  B00100,      // centre marker, alternate style
-  B00000,
-  B00100,
-  B00100,
-  B00100
-};
-byte carat2[8] = {
-  B00000,
-  B00000,
-  B01010,
-  B00100,      // centre marker plus right 1 bar
-  B00001,
-  B00101,
-  B00101,
-  B00101
-};
-byte carat3[8] = {
-  B00000,
-  B00000,
-  B01010,
-  B00100,      // centre marker plus left 1 bar
-  B10000,
-  B10100,
-  B10100,
-  B10100
-};
 
 
