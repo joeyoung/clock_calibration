@@ -74,8 +74,8 @@ const byte alarmoutpin = 11;
 const byte ppsinpin = 8;      // pulse per second input capture input
 const byte icindpin = 13;
 byte curpos = 0;
-byte setmode;
-byte alarmsetmode;
+byte setmode = HIGH;
+byte alarmsetmode = HIGH;
 byte setting = false;
 byte alarmsetting = false;
 byte setkey;
@@ -86,7 +86,7 @@ byte errcode;
 byte first;           // flag to control top line printing
 
 
-// for bargraph display
+// for bargraph display centre marker
 byte carat1[8] = {
   B00000,
   B00000,
@@ -118,11 +118,192 @@ byte carat3[8] = {
   B10100
 };
 
-void setupBar( ) {
+byte scone1[8] = {
+  B00100,
+  B00100,
+  B00100,
+  B00100,
+  B00000,      // one centre marker
+  B00100,
+  B00100,
+  B00100
+};
+byte scone2[8] = {
+  B00100,
+  B00100,
+  B00100,
+  B00100,
+  B00001,      // one centre marker plus right 1 bar
+  B00101,
+  B00101,
+  B00101
+};
+byte scone3[8] = {
+  B00100,
+  B00100,
+  B00100,
+  B00100,
+  B10000,      // one centre marker plus left 1 bar
+  B10100,
+  B10100,
+  B10100
+};
+
+byte sctwo1[8] = {
+  B00110,
+  B01010,
+  B00100,
+  B01110,
+  B00000,      // two centre marker
+  B00100,
+  B00100,
+  B00100
+};
+byte sctwo2[8] = {
+  B00110,
+  B01010,
+  B00100,
+  B01110,
+  B00001,      // two centre marker plus right 1 bar
+  B00101,
+  B00101,
+  B00101
+};
+byte sctwo3[8] = {
+  B00110,
+  B01010,
+  B00100,
+  B01110,
+  B10000,      // two centre marker plus left 1 bar
+  B10100,
+  B10100,
+  B10100
+};
+
+byte scfour1[8] = {
+  B00010,
+  B00110,
+  B01110,
+  B00010,
+  B00000,      // four centre marker
+  B00100,
+  B00100,
+  B00100
+};
+byte scfour2[8] = {
+  B00010,
+  B00110,
+  B01110,
+  B00010,
+  B00001,      // four centre marker plus right 1 bar
+  B00101,
+  B00101,
+  B00101
+};
+byte scfour3[8] = {
+  B00010,
+  B00110,
+  B01110,
+  B00010,
+  B10000,      // four centre marker plus left 1 bar
+  B10100,
+  B10100,
+  B10100
+};
+
+byte scfive1[8] = {
+  B01110,
+  B01100,
+  B00010,
+  B01100,
+  B00000,      // five centre marker
+  B00100,
+  B00100,
+  B00100
+};
+byte scfive2[8] = {
+  B01110,
+  B01100,
+  B00010,
+  B01100,
+  B00001,      // five centre marker plus right 1 bar
+  B00101,
+  B00101,
+  B00101
+};
+byte scfive3[8] = {
+  B01110,
+  B01100,
+  B00010,
+  B01100,
+  B10000,      // five centre marker plus left 1 bar
+  B10100,
+  B10100,
+  B10100
+};
+
+byte sceight1[8] = {
+  B00100,
+  B01010,
+  B00100,
+  B01010,
+  B00100,      // eight centre marker
+  B00000,
+  B00100,
+  B00100
+};
+byte sceight2[8] = {
+  B00100,
+  B01010,
+  B00100,
+  B01010,
+  B00101,      // eight centre marker plus right 1 bar
+  B00001,
+  B00101,
+  B00101
+};
+byte sceight3[8] = {
+  B00100,
+  B01010,
+  B00100,
+  B01010,
+  B10100,      // eight centre marker plus left 1 bar
+  B10000,
+  B10100,
+  B10100
+};
+
+void setupBar( byte scale ) {
   zcb.loadCG( );
-  lcd2.createChar( 1, carat1 );    //use alternate centre marker
-  lcd2.createChar( 2, carat2 );    //use alternate centre marker
-  lcd2.createChar( 3, carat3 );    //use alternate centre marker
+  if( scale == 0 ) {
+    TCCR1B = 0b00000001;    // xxxxx001 => 16 MHz clocking tmr1
+    lcd2.createChar( 1, carat1 );    //use alternate centre marker
+    lcd2.createChar( 2, carat2 );    //use alternate centre marker
+    lcd2.createChar( 3, carat3 );    //use alternate centre marker
+  } // if scale == 0
+  if( scale == 5 ) {
+    TCCR1B = 0b00000010;    // xxxxx010 => 2 MHz clocking tmr1
+    lcd2.createChar( 1, scfive1 );    //use alternate centre marker
+    lcd2.createChar( 2, scfive2 );    //use alternate centre marker
+    lcd2.createChar( 3, scfive3 );    //use alternate centre marker
+  } // if scale == 1    
+  if( scale == 2 ) {
+    TCCR1B = 0b00000010;    // xxxxx010 => 2 MHz clocking tmr1
+    lcd2.createChar( 1, sctwo1 );    //use alternate centre marker
+    lcd2.createChar( 2, sctwo2 );    //use alternate centre marker
+    lcd2.createChar( 3, sctwo3 );    //use alternate centre marker
+  } // if scale == 2    
+//  if( scale == 4 ) {
+//    lcd2.createChar( 1, scfour1 );    //use alternate centre marker
+//    lcd2.createChar( 2, scfour2 );    //use alternate centre marker
+//    lcd2.createChar( 3, scfour3 );    //use alternate centre marker
+//  } // if scale == 4    
+  if( scale == 8 ) {
+    TCCR1B = 0b00000010;    // xxxxx010 => 2 MHz clocking tmr1
+    lcd2.createChar( 1, sceight1 );    //use alternate centre marker
+    lcd2.createChar( 2, sceight2 );    //use alternate centre marker
+    lcd2.createChar( 3, sceight3 );    //use alternate centre marker
+  } // if scale == 8    
 } // setupBar( )
 
 byte getRtcStatus( byte *st ) {

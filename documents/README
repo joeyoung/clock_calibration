@@ -18,4 +18,31 @@
 // IC input--pin 8--time interval and the external interrupt0--pin 2--
 // time interval, as well as the clock's time, date, and alarm functions.
 //
+// At March 19, 2012 a second clock board has been built to serve as the
+// 'clock-to-be-adjusted' while the original clock chip serves as the
+// reference 1 pps input. As well, the following software features have
+// been added:
+//  - The clock setting functions have been made to work entirely from
+//    the (16-key) keypad. The 'set time/date' key is the '+' key, the
+//    'set alarm' key is the '-', and a 'set scale' is added on the '*'
+//    key. Holding the key down for .6 seconds enters the setting mode
+//    for that parameter, then pressing the same key briefly exits. This
+//    operation replaces the holding down an external switches on pins 3
+//    and 4.
+//  - The bargraph display now has four scale settings selected by the
+//    digits 0, 2, 5, or 8. The zero entry sets the timer prescaler to 1
+//    and thus the bargraph is at maximum sensitivity of 1/16 ppm per bar.
+//    2 selects 2 ppm per bar by choosing prescaler to divide by 8, and
+//    then the interval comparison difference is divided by 4 (>>2). 5
+//    (0.5) selects .5 ppm per bar--prescaler /8. 8 selects 8 ppm/bar.
+//  - The bargraph displays the scale selection with a tiny v, 5, 2, or
+//    8 above the centre-zero tick corresponding to 1/16, 0.5, 2, or 8
+//    ppm per bar respectively.
+// Using the external interrupt for the 'to-be-adjusted' input is not
+// really satisfactory since other interrupt activity (serial, timer0)
+// causes the display to occasionally show large differences. A second
+// 'input capture' input is needed. Alternatively, using the analog
+// comparator to trigger timer1 input capture may allow alternating
+// between the reference 1 pps and the 'to-be-adjusted' input.
+//
 //

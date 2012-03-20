@@ -12,6 +12,8 @@
 //          Mar 10/12 - ext int timer grab interval
 //          Mar 11/12 - correct grabdiff calc error, move 
 //                      most of subr to clocksubr.h, initial bar disp
+//          Mar 18/12 - set mode entry/exit via keypad ver 0.7
+//          Mar 19/12 - bar graph scale adjust
 //
 // Stand-alone version to develop display formatting. Will eventually
 // use a real-time clock/calendar IC to retain values over power down.
@@ -44,7 +46,8 @@ word *iccnt0LS;
 word *iccnt0MS;
 word iccnt;
 word ictmr, ictmrdiff;
-
+byte scale = 5; // for bargraph scale, setup for 0.5 ppm/bar
+byte scalesetmode = HIGH;
 
 // clock_calibration interrupt service routines
 
@@ -77,8 +80,11 @@ void setupInputCapt( ) {
   iccnt0MS = (word *)&iccnt0[0];
   pinMode( icindpin, OUTPUT );
   pinMode( ppsinpin, INPUT );
+  pinMode( extint0pin, INPUT );
   digitalWrite( ppsinpin, HIGH );
+  digitalWrite( extint0pin, HIGH );
   // set prescaler and set input capture falling edge
+//  TCCR1B = 0b00000001;    // xxxxx001 => 16 MHz clocking tmr1
   TCCR1B = 0b00000010;    // xxxxx010 => 2 MHz clocking tmr1
   // rest of control for 'normal port' operation
   TCCR1A = 0;
@@ -98,10 +104,10 @@ void setup(){
   lcd2.begin( LCDCOLS, LCDROWS );
   lcd2.clear( );
   lcd2.setCursor( 0, 0 );
-  lcd2.print( "Clk 0.6 " );
+  lcd2.print( "Clk 0.7 " );
   lcd2.setCursor( 0, 1 );
   lcd2.setBacklight( HIGH );
-  setupBar( );                // change centre marker
+  setupBar( scale );                // change centre marker
 //  kpd.init( );
   errcode = getRtcStatus( state );
   if( errcode ) {
@@ -144,15 +150,17 @@ void setup(){
   setRtcClkOut( (byte)0x83 );  // set clk out to 1 Hz
 //  setRtcClkOut( (byte)0 );     // set clk out OFF
   msecounter = millis( );
-  setupInputCapt( );
-  attachInterrupt( 0, grabtimer, RISING ); // see how ext int does
-  pinMode( extint0pin, INPUT );
   pinMode( setpin, INPUT );
   pinMode( alarmsetpin, INPUT );
   digitalWrite( setpin, HIGH );
   digitalWrite( alarmsetpin, HIGH );  // turn on pullups
   pinMode( alarmoutpin, OUTPUT );
+  setupInputCapt( ); // includes setting interrupt input pins mode
+  attachInterrupt( 0, grabtimer, RISING ); // see how ext int does
   first = true;
+  
+  kpd.addEventListener( startSetMode );
+  kpd.setHoldTime( 600 );
 
 // debug
 //  sprintf( str, "%.2x %.2x %.2x ", state[1], rawtime[7], rawtime[8] );
@@ -163,6 +171,7 @@ void setup(){
 // variables for display of clock interrupt info
 byte indstate = LOW;
 word oldcnt, cntdiff, oldgrab, grabdiff;
+int barlength;
 
 void loop( ) {
   
@@ -193,8 +202,13 @@ void loop( ) {
     Serial.print( " grabcnt " );
     Serial.print( grabcnt, HEX );
     Serial.print( " grabdiff " );
-    Serial.println( grabdiff, HEX );
-    zcb.drawBar( cntdiff-grabdiff, MAXBARS, POSN, LINE );
+    Serial.print( grabdiff, HEX );
+    barlength = grabdiff-cntdiff;
+    if( scale == 2 ) barlength = barlength>>2;
+    if( scale == 8 ) barlength = barlength>>4;
+    Serial.print( " bar " );
+    Serial.println( barlength, DEC );
+    zcb.drawBar( barlength, MAXBARS, POSN, LINE );
     lcd2.leftToRight( ); // bar graph uses rightToLeft for neg args
   } // if ext int timer read flag
 
@@ -229,7 +243,7 @@ void loop( ) {
     } // if week
 
     if( first ) {
-      sprintf( datestr, "Clk 0.6 %.3s %.2d%.2d",
+      sprintf( datestr, "Clk 0.7 %.3s %.2d%.2d",
                    months[month-1], century, year );
       lcd2.noBlink( );
       lcd2.setCursor( 0, 0 );
@@ -244,10 +258,15 @@ void loop( ) {
 
   } // if second has elapsed
   
-  setmode = digitalRead( setpin );
+//  setmode = digitalRead( setpin );
+// use keypad HOLD state to enter setmode
+  setkey = kpd.getKey( );
   if( setmode == LOW ) {
     sprintf( datestr, "%.2d.%.2d.%.2d %.1d %.2d %.2d", 
                    hours, minutes, seconds, dow, dom, month );
+    kbdBeep( NOTE_D4, 100 );
+    delay( 150 );
+    kbdBeep( NOTE_A4, 100 );
     curpos = 0;
   } // if setmode
   while( setmode == LOW ) {
@@ -261,8 +280,9 @@ void loop( ) {
     lcd2.blink( );
     setkey = kpd.getKey( );
     while( setkey == NO_KEY && setmode == LOW ) {
-      setmode = digitalRead( setpin );
+//      setmode = digitalRead( setpin );
       setkey = kpd.getKey( );
+      if( setkey == '+' ) setmode = HIGH; // exit setmode on C key
     } // wait for key
     setting = true;
     if( setmode == LOW ) {
@@ -277,10 +297,15 @@ void loop( ) {
     } // only update if still in setmode
   } // while setmode
 
-  alarmsetmode = digitalRead( alarmsetpin );
+//  alarmsetmode = digitalRead( alarmsetpin );
+// use keypad HOLD state to enter setmode
+  setkey = kpd.getKey( );
   if( alarmsetmode == LOW ) {
     lcd2.setCursor( 0, 0 );
     lcd2.print( "ALM Set" );
+    kbdBeep( NOTE_D4, 100 );
+    delay( 150 );
+    kbdBeep( NOTE_A4, 100 );
     curpos = 0;
     sprintf( datestr, "mm.hh dm d      " );
   } // if alarmsetmode
@@ -292,8 +317,9 @@ void loop( ) {
     lcd2.blink( );
     setkey = kpd.getKey( );
     while( setkey == NO_KEY && alarmsetmode == LOW ) {
-      alarmsetmode = digitalRead( alarmsetpin );
+//      alarmsetmode = digitalRead( alarmsetpin );
       setkey = kpd.getKey( );
+      if( setkey == '-' ) alarmsetmode = HIGH; // exit alrmsetmode on C key
     } // wait for key
     digitalWrite( alarmoutpin, LOW );
     alarmsetting = true;
@@ -308,7 +334,46 @@ void loop( ) {
       } // if entry valid
     } // if still setting
   } // while alarmsetmode
-  
+ 
+// set scale of bargraph
+  setkey = kpd.getKey( );
+  if( scalesetmode == LOW ) {
+    lcd2.setCursor( 0, 0 );
+    lcd2.print( "Scale " );
+    curpos = 6;
+    lcd2.print( 3, DEC );
+    kbdBeep( NOTE_D4, 100 );
+    delay( 150 );
+    kbdBeep( NOTE_A4, 100 );
+  } // if scalesetmode
+  while( scalesetmode == LOW ) {
+    lcd2.setCursor( curpos, 0 );
+    lcd2.print( (int)scale, DEC );
+    lcd2.setCursor( curpos, 0 );
+    lcd2.blink( );
+    setkey = kpd.getKey( );
+    while( setkey == NO_KEY && scalesetmode == LOW ) {
+//      alarmsetmode = digitalRead( alarmsetpin );
+      setkey = kpd.getKey( );
+      if( setkey == '*' ) {
+        scalesetmode = HIGH; // exit alrmsetmode on C key
+        setupBar( scale );
+      } // if exit scale setting
+    } // wait for key
+    if( scalesetmode == LOW ) {
+      if( isdigit( setkey ) ) {
+        if( setkey == '0' || setkey == '1' || setkey == '2' || setkey == '5' || setkey == '8' ) {
+          kbdBeep( NOTE_A5, 100 );
+          scale = setkey & 0x0f;
+        } else {
+          kbdBeep( NOTE_A3, 150 );
+        } // if valid scale value
+      } else {
+        kbdBeep( NOTE_A3, 150 );
+      } // if entry valid
+    } // if still setting
+  } // while scalesetmode
+ 
   if( setting && ( curpos == 19 || curpos == 8 ) ) { 
     //only set if exact number entries: 8 is time only
     getRtcTime( rawtime );     // get current info in case only time
@@ -411,4 +476,27 @@ void loop( ) {
   } // if alarmsetting
   
   
-} // loop
+} // loop( )
+
+
+void startSetMode( KeypadEvent setkey ) {
+  
+  switch( kpd.getState( ) ){
+  case PRESSED:
+      break;
+  case HOLD:
+      if( setkey == '+' ) {
+        setmode = LOW;
+      } // if setting key held
+      if( setkey == '-' ) {
+        alarmsetmode = LOW;
+      } // if alarm setting key held
+      if( setkey == '*' ) {
+        scalesetmode = LOW;
+      } // if set scale key held
+      break;  
+  case RELEASED:
+      break;
+  } // switch on keypad state
+  
+} // startSetMode( )
