@@ -14,6 +14,9 @@
 //                      most of subr to clocksubr.h, initial bar disp
 //          Mar 18/12 - set mode entry/exit via keypad ver 0.7
 //          Mar 19/12 - bar graph scale adjust
+//          Mar 21/12 - select calib/meas with analog comp IC, pin8 IC
+//          Mar 22/12 - exit cal mode cleanup - use keypad's PRESSED
+//          Mar 23/12 - cleanups, indicator blinks
 //
 // Stand-alone version to develop display formatting. Will eventually
 // use a real-time clock/calendar IC to retain values over power down.
@@ -38,19 +41,30 @@
 byte iccnt0[ ] = { 0, 0, 0, 0 };
 byte iccnt1[ ] = { 0, 0, 0, 0 };
 byte icflag;
-byte grabflg;
+byte acicflag;   // when input capture is via comp input
 word ovflcnt = 0;
-word grabcnt = 0;
-word grabovfl;
 word *iccnt0LS;
 word *iccnt0MS;
 word iccnt;
 word ictmr, ictmrdiff;
 byte scale = 5; // for bargraph scale, setup for 0.5 ppm/bar
+byte calmode = true;      // startup in calmode - ppsinpin active
+byte calentry = true;
 byte scalesetmode = HIGH;
 
-// clock_calibration interrupt service routines
+// variables for display of clock interrupt info
+byte indstate = LOW;
+word oldcnt, cntdiff; // , oldgrab, grabdiff;
+word caldiff;
+int barlength;
 
+// indicator flash timing
+long offtime;
+byte indpin;
+
+
+// clock_calibration interrupt service routines
+// capture interrupt
 ISR( TIMER1_CAPT_vect ) {
   // read captured count
 //  *iccnt0LS = ICR1;
@@ -58,19 +72,14 @@ ISR( TIMER1_CAPT_vect ) {
   *iccnt0MS = ovflcnt;
 //  ovflcnt = 0;
   // set flag for background
-  icflag = true;
-  ictmr = TCNT1;
+    icflag = true;
+  ictmr = TCNT1;   // grab timer for measure of int response time
 } // input capture interrupt service
 
+// timer overflow interrupt
 ISR( TIMER1_OVF_vect ) {
   ovflcnt += 1;
 } // timer count overflow interrupt service
-
-void grabtimer( ) {
-  grabcnt = TCNT1;
-  grabovfl = ovflcnt;
-  grabflg = true;
-} // external interrupt to get counter contents
 
 
 // setup for interrupt service functions
@@ -80,22 +89,31 @@ void setupInputCapt( ) {
   iccnt0MS = (word *)&iccnt0[0];
   pinMode( icindpin, OUTPUT );
   pinMode( ppsinpin, INPUT );
-  pinMode( extint0pin, INPUT );
+  pinMode( acicpin, INPUT );
   digitalWrite( ppsinpin, HIGH );
-  digitalWrite( extint0pin, HIGH );
+  digitalWrite( acicpin, HIGH );
   // set prescaler and set input capture falling edge
 //  TCCR1B = 0b00000001;    // xxxxx001 => 16 MHz clocking tmr1
   TCCR1B = 0b00000010;    // xxxxx010 => 2 MHz clocking tmr1
   // rest of control for 'normal port' operation
   TCCR1A = 0;
+  // setup comparator input, but leave IC on ppsinpin (ref input)
+  DIDR1 = 0b00000011;  // turn off AIN0, AIN1 digital i/p buffers
+  ACSR = 0b01010010;   // comp on, AIN0 to BGref, disable ac int, falling edge
   // clear all the timer1 flags
   TIFR1 = 0;
   // enable IC interrupts, OVFL ints, disable others.
   TIMSK1 = 0b00100001;
 //    TIMSK1 = 0b00100000; //no overflow ints
+  calmode = true;   // go to cal mode on startup
 } // setupInputCapt( )
 
-
+// turn on indicator, setup OFF time
+void flash( byte pin, int duration ) {
+  digitalWrite( pin, HIGH );
+  indpin = pin;
+  offtime = millis( ) + duration;
+} // flash on
 
 void setup(){
   Wire.begin( );
@@ -108,7 +126,6 @@ void setup(){
   lcd2.setCursor( 0, 1 );
   lcd2.setBacklight( HIGH );
   setupBar( scale );                // change centre marker
-//  kpd.init( );
   errcode = getRtcStatus( state );
   if( errcode ) {
     lcd2.print( "clk st err " );
@@ -150,13 +167,9 @@ void setup(){
   setRtcClkOut( (byte)0x83 );  // set clk out to 1 Hz
 //  setRtcClkOut( (byte)0 );     // set clk out OFF
   msecounter = millis( );
-  pinMode( setpin, INPUT );
-  pinMode( alarmsetpin, INPUT );
-  digitalWrite( setpin, HIGH );
-  digitalWrite( alarmsetpin, HIGH );  // turn on pullups
   pinMode( alarmoutpin, OUTPUT );
+  pinMode( acindpin, OUTPUT );
   setupInputCapt( ); // includes setting interrupt input pins mode
-  attachInterrupt( 0, grabtimer, RISING ); // see how ext int does
   first = true;
   
   kpd.addEventListener( startSetMode );
@@ -168,18 +181,35 @@ void setup(){
 
 } // setup( )
 
-// variables for display of clock interrupt info
-byte indstate = LOW;
-word oldcnt, cntdiff, oldgrab, grabdiff;
-int barlength;
-
 void loop( ) {
   
-  if( icflag ) {
-    digitalWrite( icindpin, indstate );
+    setkey = kpd.getKey( );
+    if( exitkey ) {
+    calmode = false;
+    calentry = true;
+    exitkey = false;
+    caldiff = cntdiff;         // grab this value for ref
+    ACSR = ACSR | 0b00010100;  // clr flag, enable comp IC
+    kbdBeep( NOTE_A5, 100 );
+  } // if exit calmode
+  
+  if( calmode == true && calentry == true ) {
+    // switch off comp IC, to allow ref input ICs
+    ACSR = ACSR & 0b11110011;  // mask off ACIC, be sure ACIE still 0
+    kbdBeep( NOTE_D4, 100 );
+    delay( 150 );
+    kbdBeep( NOTE_A4, 100 );
+    calentry = false;
+  } // if calmode
+
+  if( millis( ) > offtime ) digitalWrite( indpin, LOW );
+
+  if( icflag && calmode ) {
     icflag = false;
-    if( indstate == HIGH ) indstate = LOW;
-    else if( indstate == LOW ) indstate = HIGH;
+//    digitalWrite( icindpin, indstate );
+//    if( indstate == HIGH ) indstate = LOW;
+//    else if( indstate == LOW ) indstate = HIGH;
+    flash( icindpin, 250 );
 //    cntdiff = *iccnt0LS - oldcnt;
 //    oldcnt = *iccnt0LS;
     cntdiff = iccnt - oldcnt;
@@ -191,34 +221,37 @@ void loop( ) {
     Serial.print( " diff " );
     Serial.print( cntdiff, HEX );
     Serial.print( " ictmrdiff " );
-    Serial.print( ictmrdiff, HEX );
+    Serial.println( ictmrdiff, HEX );
+    lcd2.setCursor( 0, 0 );
+    lcd2.print( cntdiff, HEX );
+    lcd2.print( "   " );
   } // if input capt flag set
-  if( grabflg ) {
-    grabflg = false;
-    grabdiff = grabcnt - oldgrab ;
-    oldgrab = grabcnt;
-    Serial.print( " grabovfl " );
-    Serial.print( grabovfl, HEX );
-    Serial.print( " grabcnt " );
-    Serial.print( grabcnt, HEX );
-    Serial.print( " grabdiff " );
-    Serial.print( grabdiff, HEX );
-    barlength = grabdiff-cntdiff;
+
+  if( icflag && !calmode ) {
+    icflag = false;
+    flash( acindpin, 250 );
+    cntdiff = iccnt - oldcnt;
+    oldcnt = iccnt;
+    Serial.print( *iccnt0MS, HEX );
+    Serial.print( " " );
+    Serial.print( iccnt, HEX );
+    ictmrdiff = ictmr - iccnt;
+    Serial.print( " diff " );
+    Serial.print( cntdiff, HEX );
+    Serial.print( " ictmrdiff " );
+    Serial.print( ictmrdiff, HEX );
+    barlength = cntdiff - caldiff;
     if( scale == 2 ) barlength = barlength>>2;
     if( scale == 8 ) barlength = barlength>>4;
     Serial.print( " bar " );
     Serial.println( barlength, DEC );
     zcb.drawBar( barlength, MAXBARS, POSN, LINE );
     lcd2.leftToRight( ); // bar graph uses rightToLeft for neg args
-  } // if ext int timer read flag
+  }// if analog comparator IC happened
 
   if( millis( ) >= msecounter+1000 ) {
     msecounter += 1000;
     seconds += 1;
-//    zcb.drawBar( barCount, MAXBARS, POSN, LINE );
-//    barCount++;
-//    if( barCount > MAXBARS ) barCount = -MAXBARS;
-//    lcd2.leftToRight( ); // bar graph uses rightToLeft for neg args
     if( seconds > 59 ) {
       seconds = 0;
       minutes += 1;
@@ -258,7 +291,6 @@ void loop( ) {
 
   } // if second has elapsed
   
-//  setmode = digitalRead( setpin );
 // use keypad HOLD state to enter setmode
   setkey = kpd.getKey( );
   if( setmode == LOW ) {
@@ -280,7 +312,6 @@ void loop( ) {
     lcd2.blink( );
     setkey = kpd.getKey( );
     while( setkey == NO_KEY && setmode == LOW ) {
-//      setmode = digitalRead( setpin );
       setkey = kpd.getKey( );
       if( setkey == '+' ) setmode = HIGH; // exit setmode on C key
     } // wait for key
@@ -297,7 +328,6 @@ void loop( ) {
     } // only update if still in setmode
   } // while setmode
 
-//  alarmsetmode = digitalRead( alarmsetpin );
 // use keypad HOLD state to enter setmode
   setkey = kpd.getKey( );
   if( alarmsetmode == LOW ) {
@@ -317,7 +347,6 @@ void loop( ) {
     lcd2.blink( );
     setkey = kpd.getKey( );
     while( setkey == NO_KEY && alarmsetmode == LOW ) {
-//      alarmsetmode = digitalRead( alarmsetpin );
       setkey = kpd.getKey( );
       if( setkey == '-' ) alarmsetmode = HIGH; // exit alrmsetmode on C key
     } // wait for key
@@ -358,6 +387,8 @@ void loop( ) {
       if( setkey == '*' ) {
         scalesetmode = HIGH; // exit alrmsetmode on C key
         setupBar( scale );
+        calmode = true;      // go to cal mode next
+        calentry = true;
       } // if exit scale setting
     } // wait for key
     if( scalesetmode == LOW ) {
@@ -468,10 +499,7 @@ void loop( ) {
     Wire.endTransmission( );      // set all alarm regs
     alarmsetting = false;
     curpos = 0;
-//    first = true;                  // re-arm time display
-  clrRtcStatus( flags );
-//  sprintf( str, "%x %x %x ", state[1], rawtime[7], rawtime[8] );
-//  Serial.print( str );
+    clrRtcStatus( flags );
 
   } // if alarmsetting
   
@@ -483,6 +511,7 @@ void startSetMode( KeypadEvent setkey ) {
   
   switch( kpd.getState( ) ){
   case PRESSED:
+      if( setkey == '=' && calmode ) exitkey = true;
       break;
   case HOLD:
       if( setkey == '+' ) {
@@ -494,6 +523,9 @@ void startSetMode( KeypadEvent setkey ) {
       if( setkey == '*' ) {
         scalesetmode = LOW;
       } // if set scale key held
+      if( setkey == '=' ) {
+        calmode = true;
+      } // if cal key held
       break;  
   case RELEASED:
       break;

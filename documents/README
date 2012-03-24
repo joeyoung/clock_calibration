@@ -45,4 +45,23 @@
 // comparator to trigger timer1 input capture may allow alternating
 // between the reference 1 pps and the 'to-be-adjusted' input.
 //
+// At March 23, 2012. The measure input pulse-per-second signal now comes
+// in on pin digital 7 which is configured as input AIN1 for the analog
+// comparator. The comparator is setup with the bandgap reference on its
+// AIN0 input (pin digital 6, is thus not available?--not sure), and the
+// comparator output is enabled to generate an IC signal. The loop 
+// routines now switch between the reference input (on pin 8) and the
+// measure input (pin 7) by defining a 'calmode' keypad key (the = key).
+// As with the other keypad setting operations, holding the key down for
+// .6 seconds enables the calibrate mode, where the reference input is
+// selected and the display shows the (hex) value read by the input
+// captures. When the '=' key is pressed again, the cal mode is exited
+// and the bargraph shows the difference between the saved reference
+// count and the measure input captured values. The active input is 
+// further indicated by flashing pin 13 for ref input, pin 10 for the meas
+// input on detecting the input capture interrupt. Finally, the 'setscale'
+// operation exits by setting up entry to the 'cal' mode because after the
+// scale changes, the reference input count saved may no longer be right--
+// when the clock divisor is changed by choosing the scale.
 //
+

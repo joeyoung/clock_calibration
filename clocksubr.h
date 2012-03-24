@@ -67,18 +67,19 @@ byte rawtime[16];
 
 // setting variables
 // const byte setpin = 2;
-const byte extint0pin = 2;   //use ext int on pin 2
-const byte setpin = 4;
-const byte alarmsetpin = 3;
+// const byte extint0pin = 2;   //use ext int on pin 2
+const byte acicpin = 7;         // ac input AIN1
+const byte acicpin0 = 6;        // ac input AIN0
 const byte alarmoutpin = 11;
 const byte ppsinpin = 8;      // pulse per second input capture input
-const byte icindpin = 13;
+const byte icindpin = 13;     // indicator for ref pps input
+const byte acindpin = 10;     // indicator for meas input
 byte curpos = 0;
 byte setmode = HIGH;
 byte alarmsetmode = HIGH;
 byte setting = false;
 byte alarmsetting = false;
-byte setkey;
+byte setkey, exitkey;
 char inputstr[32];    // a few extra chars only protection of overrun
 
 byte flags;
