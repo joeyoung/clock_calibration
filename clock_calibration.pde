@@ -17,6 +17,9 @@
 //          Mar 21/12 - select calib/meas with analog comp IC, pin8 IC
 //          Mar 22/12 - exit cal mode cleanup - use keypad's PRESSED
 //          Mar 23/12 - cleanups, indicator blinks
+//          Mar 24/12 - automatic exit from cal mode
+//          Mar 25/12 - histogram of cntdiff for auto exit of cal,
+//                      suppress erroneous screen displays
 //
 // Stand-alone version to develop display formatting. Will eventually
 // use a real-time clock/calendar IC to retain values over power down.
@@ -51,17 +54,23 @@ byte scale = 5; // for bargraph scale, setup for 0.5 ppm/bar
 byte calmode = true;      // startup in calmode - ppsinpin active
 byte calentry = true;
 byte scalesetmode = HIGH;
-
-// variables for display of clock interrupt info
-byte indstate = LOW;
-word oldcnt, cntdiff; // , oldgrab, grabdiff;
+byte firstcnt = true;   // flag to ignore invalid differences
+word oldcnt, cntdiff;
 word caldiff;
 int barlength;
+
+// automatic calibration exit histogram method
+word calsamp[5];
+byte calsnr[5];
+byte calidx, calnxt;
 
 // indicator flash timing
 long offtime;
 byte indpin;
 
+// automatic calibration mode exit
+#define AUTOCNT 5
+byte autocnt;
 
 // clock_calibration interrupt service routines
 // capture interrupt
@@ -94,12 +103,12 @@ void setupInputCapt( ) {
   digitalWrite( acicpin, HIGH );
   // set prescaler and set input capture falling edge
 //  TCCR1B = 0b00000001;    // xxxxx001 => 16 MHz clocking tmr1
-  TCCR1B = 0b00000010;    // xxxxx010 => 2 MHz clocking tmr1
+  TCCR1B = 0b01000010;    // xxxxx010 => 2 MHz clocking tmr1
   // rest of control for 'normal port' operation
   TCCR1A = 0;
   // setup comparator input, but leave IC on ppsinpin (ref input)
   DIDR1 = 0b00000011;  // turn off AIN0, AIN1 digital i/p buffers
-  ACSR = 0b01010010;   // comp on, AIN0 to BGref, disable ac int, falling edge
+  ACSR = 0b01010011;   // comp on, AIN0 to BGref, disable ac int, falling edge
   // clear all the timer1 flags
   TIFR1 = 0;
   // enable IC interrupts, OVFL ints, disable others.
@@ -181,14 +190,16 @@ void setup(){
 
 } // setup( )
 
+
 void loop( ) {
   
     setkey = kpd.getKey( );
     if( exitkey ) {
     calmode = false;
+    firstcnt = true;
     calentry = true;
     exitkey = false;
-    caldiff = cntdiff;         // grab this value for ref
+//    caldiff = cntdiff;         // grab this value for ref
     ACSR = ACSR | 0b00010100;  // clr flag, enable comp IC
     kbdBeep( NOTE_A5, 100 );
   } // if exit calmode
@@ -200,19 +211,25 @@ void loop( ) {
     delay( 150 );
     kbdBeep( NOTE_A4, 100 );
     calentry = false;
-  } // if calmode
+    autocnt = 0;            // reset automatic exit counter
+    firstcnt = true;
+  } // if entering calmode
 
   if( millis( ) > offtime ) digitalWrite( indpin, LOW );
 
   if( icflag && calmode ) {
     icflag = false;
-//    digitalWrite( icindpin, indstate );
-//    if( indstate == HIGH ) indstate = LOW;
-//    else if( indstate == LOW ) indstate = HIGH;
     flash( icindpin, 250 );
 //    cntdiff = *iccnt0LS - oldcnt;
 //    oldcnt = *iccnt0LS;
-    cntdiff = iccnt - oldcnt;
+    if( firstcnt ) {
+      cntdiff = 0;
+      firstcnt = false;
+      for( calidx = 0; calidx < 5; calidx++ ) calsnr[calidx] = 0;
+      calnxt = 0;      // setup histogram auto exit
+    } else {
+      cntdiff = iccnt - oldcnt;
+    } // ignore invalid oldcnt
     oldcnt = iccnt;
     Serial.print( *iccnt0MS, HEX );
     Serial.print( " " );
@@ -223,14 +240,45 @@ void loop( ) {
     Serial.print( " ictmrdiff " );
     Serial.println( ictmrdiff, HEX );
     lcd2.setCursor( 0, 0 );
+    lcd2.print( "        " ); // clear screen for cal values
+    lcd2.setCursor( 0, 0 );
     lcd2.print( cntdiff, HEX );
-    lcd2.print( "   " );
+    // try to automatically exit from cal mode
+//    if( abs( cntdiff - caldiff ) < 2 ) autocnt++;
+//    if( autocnt > AUTOCNT ) {
+//      exitkey = true;
+//      firstcnt = true;  // setup meas to ignore first diff calc
+//    } // if count of equal pairs enough
+//    caldiff = cntdiff;    // retain for next comparison
+
+    // use histogram of cntdiff values method for auto-exit
+    for( calidx = 0; calidx < 5; calidx++ ) {
+      if( calsamp[calidx] == cntdiff ) {
+        calsnr[calidx]++;
+        if( calsnr[calidx] > 5 ) {
+          caldiff = calsamp[calidx];  // keep first value found 5 times
+          exitkey = true;
+          firstcnt = true;
+        } // if this value found 5 times
+      } // if sample value already in list
+    } // loop over saved values
+    if( calidx >= 5 ) {
+      calsamp[calnxt] = cntdiff;      // save in next available slot
+      calnxt++;
+      if( calnxt >= 5 ) calnxt = 0;   // loop around to start
+    } // if sample value not found
+      
   } // if input capt flag set
 
   if( icflag && !calmode ) {
     icflag = false;
     flash( acindpin, 250 );
-    cntdiff = iccnt - oldcnt;
+    if( firstcnt ) {
+      cntdiff = 0;
+      firstcnt = false;
+    } else {
+      cntdiff = iccnt - oldcnt;
+    } // ignore first invalid diff
     oldcnt = iccnt;
     Serial.print( *iccnt0MS, HEX );
     Serial.print( " " );
@@ -245,8 +293,10 @@ void loop( ) {
     if( scale == 8 ) barlength = barlength>>4;
     Serial.print( " bar " );
     Serial.println( barlength, DEC );
-    zcb.drawBar( barlength, MAXBARS, POSN, LINE );
-    lcd2.leftToRight( ); // bar graph uses rightToLeft for neg args
+    if( cntdiff != 0 ) {
+      zcb.drawBar( barlength, MAXBARS, POSN, LINE );
+      lcd2.leftToRight( ); // bar graph uses rightToLeft for neg args
+    } // do not draw invalid diff
   }// if analog comparator IC happened
 
   if( millis( ) >= msecounter+1000 ) {
@@ -389,6 +439,7 @@ void loop( ) {
         setupBar( scale );
         calmode = true;      // go to cal mode next
         calentry = true;
+        icflag = false;      // zap any pending ic interrupt
       } // if exit scale setting
     } // wait for key
     if( scalesetmode == LOW ) {

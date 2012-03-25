@@ -277,19 +277,19 @@ byte sceight3[8] = {
 void setupBar( byte scale ) {
   zcb.loadCG( );
   if( scale == 0 ) {
-    TCCR1B = 0b00000001;    // xxxxx001 => 16 MHz clocking tmr1
+    TCCR1B = 0b01000001;    // xxxxx001 => 16 MHz clocking tmr1
     lcd2.createChar( 1, carat1 );    //use alternate centre marker
     lcd2.createChar( 2, carat2 );    //use alternate centre marker
     lcd2.createChar( 3, carat3 );    //use alternate centre marker
   } // if scale == 0
   if( scale == 5 ) {
-    TCCR1B = 0b00000010;    // xxxxx010 => 2 MHz clocking tmr1
+    TCCR1B = 0b01000010;    // xxxxx010 => 2 MHz clocking tmr1
     lcd2.createChar( 1, scfive1 );    //use alternate centre marker
     lcd2.createChar( 2, scfive2 );    //use alternate centre marker
     lcd2.createChar( 3, scfive3 );    //use alternate centre marker
   } // if scale == 1    
   if( scale == 2 ) {
-    TCCR1B = 0b00000010;    // xxxxx010 => 2 MHz clocking tmr1
+    TCCR1B = 0b01000010;    // xxxxx010 => 2 MHz clocking tmr1
     lcd2.createChar( 1, sctwo1 );    //use alternate centre marker
     lcd2.createChar( 2, sctwo2 );    //use alternate centre marker
     lcd2.createChar( 3, sctwo3 );    //use alternate centre marker
@@ -300,7 +300,7 @@ void setupBar( byte scale ) {
 //    lcd2.createChar( 3, scfour3 );    //use alternate centre marker
 //  } // if scale == 4    
   if( scale == 8 ) {
-    TCCR1B = 0b00000010;    // xxxxx010 => 2 MHz clocking tmr1
+    TCCR1B = 0b01000010;    // xxxxx010 => 2 MHz clocking tmr1
     lcd2.createChar( 1, sceight1 );    //use alternate centre marker
     lcd2.createChar( 2, sceight2 );    //use alternate centre marker
     lcd2.createChar( 3, sceight3 );    //use alternate centre marker
