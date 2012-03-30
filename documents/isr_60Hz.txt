@@ -1,0 +1,27 @@
+// March 27/12 - this modified ISR only sets the icflag after 60 input
+// capture signals. A simple 2N7000 switch driven from an AC wall-wart
+// connected to measure port. Produced on-screen bargraph most of the
+// time on scale '8' (8 ppm/bar), but also lots of wildly offscale bars.
+
+// clock_calibration interrupt service routines
+// capture interrupt
+ISR( TIMER1_CAPT_vect ) {
+  // read captured count
+//  *iccnt0LS = ICR1;
+  iccnt = ICR1;
+  *iccnt0MS = ovflcnt;
+//  ovflcnt = 0;
+  // set flag for background
+    if( calmode ) {
+      icflag = true;
+    } else {
+      icdiv++;
+      if( icdiv >= 60 ) {
+      icdiv = 0;
+      icflag = true;
+      }
+    }
+  ictmr = TCNT1;   // grab timer for measure of int response time
+} // input capture interrupt service
+
+
